@@ -17,7 +17,13 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import OpaqueFunction
 from launch.substitutions import LaunchConfiguration
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from ament_index_python.packages import get_package_share_directory
 import os
+
+import numpy as np
+from copy import deepcopy
 
 import vrx_gz.launch
 from vrx_gz.model import Model
@@ -35,18 +41,90 @@ def launch(context, *args, **kwargs):
     gz_paused = LaunchConfiguration('paused').perform(context).lower() == 'true'
     competition_mode = LaunchConfiguration('competition_mode').perform(context).lower() == 'true'
     extra_gz_args = LaunchConfiguration('extra_gz_args').perform(context)
+    init_poses_str = LaunchConfiguration('init_poses').perform(context)
+    goals_str = LaunchConfiguration('goals').perform(context)
+    buoy_poses_str = LaunchConfiguration('buoy_poses').perform(context)
+    method = LaunchConfiguration('method').perform(context)
+    agent_type = LaunchConfiguration('agent_type').perform(context)
+    model_path = LaunchConfiguration('model_path').perform(context)
+
+    init_poses = [[float(p.split(',')[0]), float(p.split(',')[1]), 0.0, 0.0, 0.0, float(p.split(',')[2])] 
+                  for p in init_poses_str.split(';')]
+    goals = [[float(g) for g in goal.split(',')] for goal in goals_str.split(';')]
 
     launch_processes = []
+
 
     models = []
     if config_file and config_file != '':
         with open(config_file, 'r') as stream:
             models = Model.FromConfig(stream)
     else:
-      m = Model('wamv', 'wam-v', [-532, 162, 0, 0, 0, 1])
-      if robot_urdf and robot_urdf != '':
-          m.set_urdf(robot_urdf)
-      models.append(m)
+        robot_names = []
+        for i,pose in enumerate(init_poses):
+            name = f'wamv{i+1}'
+            robot_names.append(name)
+            model = Model(name,'wam-v',pose)
+            models.append(model)
+
+        robot_names_arg = DeclareLaunchArgument(
+            'robot_names',
+            default_value=' '.join(robot_names),
+            description='Space-separated list of robot names'
+        )
+        robot_goals_arg = DeclareLaunchArgument(
+            'robot_goals',
+            default_value=' '.join(','.join(str(p) for p in goal) for goal in goals)
+        )
+        buoy_poses_arg = DeclareLaunchArgument(
+            'buoy_poses',
+            default_value=buoy_poses_str
+        )
+        method_arg = DeclareLaunchArgument(
+            'method',
+            default_value=method
+        )
+        model_path_arg = DeclareLaunchArgument(
+            'model_path',
+            default_value=model_path
+        )
+        agent_type_arg = DeclareLaunchArgument(
+            'agent_type',
+            default_value=agent_type
+        )
+
+        lidar_processor_dir = get_package_share_directory('lidar_processor')
+        state_processor_dir = get_package_share_directory('state_processor')
+        action_planner_dir = get_package_share_directory('action_planner')
+        collision_detector_dir = get_package_share_directory('collision_detector')
+
+        launch_processes.append(robot_names_arg)
+        launch_processes.append(robot_goals_arg)
+        launch_processes.append(buoy_poses_arg)
+        launch_processes.append(method_arg)
+        launch_processes.append(model_path_arg)
+        launch_processes.append(agent_type_arg)
+        launch_processes.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(f'{lidar_processor_dir}/launch/lidar_processor.launch.py'),
+            launch_arguments={'robot_names': LaunchConfiguration('robot_names')}.items()
+        ))
+        launch_processes.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(f'{state_processor_dir}/launch/state_processor.launch.py'),
+            launch_arguments={'robot_names': LaunchConfiguration('robot_names'),'robot_goals': LaunchConfiguration('robot_goals')}.items()
+        ))
+        launch_processes.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(f'{action_planner_dir}/launch/action_planner.launch.py'),
+            launch_arguments={'method':LaunchConfiguration('method'),
+                              'robot_names': LaunchConfiguration('robot_names'),
+                              'model_path': LaunchConfiguration('model_path'),
+                              'agent_type': LaunchConfiguration('agent_type')}.items()
+        ))
+        launch_processes.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(f'{collision_detector_dir}/launch/collision_detector.launch.py'),
+            launch_arguments={'robot_names': LaunchConfiguration('robot_names'),
+                              'buoy_poses': LaunchConfiguration('buoy_poses')}.items()
+        ))
+        
 
     world_name, ext = os.path.splitext(world_name)
     launch_processes.extend(vrx_gz.launch.simulation(world_name, headless, 
@@ -107,5 +185,35 @@ def generate_launch_description():
             'extra_gz_args',
             default_value='',
             description='Additional arguments to be passed to gz sim. '),
+        DeclareLaunchArgument(
+            'method',
+            default_value='',
+            description='method of action planner'
+        ),
+        DeclareLaunchArgument(
+            'agent_type',
+            default_value='',
+            description='RL agent type of action planner'
+        ),
+        DeclareLaunchArgument(
+            'model_path',
+            default_value='',
+            description='RL agent model of action planner'
+        ),
+        DeclareLaunchArgument(
+            'init_poses',
+            default_value='',
+            description='Initial poses of robots in the format: "x_1,y_1,theta_1;..." '
+        ),
+        DeclareLaunchArgument(
+            'goals',
+            default_value='',
+            description='Goals of robots in the format: "x_1,y_1;..."'
+        ),
+        DeclareLaunchArgument(
+            'buoy_poses',
+            default_value='',
+            description='Positions and radii of bouys in the format: "x_1,y_1,r_1;..."'
+        ),
         OpaqueFunction(function=launch),
     ])

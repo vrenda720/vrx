@@ -28,6 +28,7 @@
           </wavefield>
         </plugin>
         <visibility_flags>8</visibility_flags>
+        <laser_retro>100.0</laser_retro>
       </visual>
     </link>
   </model>
