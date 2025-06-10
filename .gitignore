@@ -5,4 +5,3 @@ syntax: glob
 *.orig
 *.*~
 *.pyc
-.github
